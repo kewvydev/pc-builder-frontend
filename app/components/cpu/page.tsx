@@ -38,6 +38,60 @@ const hasIntegratedGraphics = (item: ComponentItem) => {
   return graphics !== 'none' && graphics !== 'no' && graphics !== 'n/a';
 };
 
+/**
+ * Infiere el socket del CPU basándose en la microarquitectura o nombre.
+ * El dataset no incluye socket, así que lo determinamos automáticamente.
+ */
+const inferCpuSocket = (item: ComponentItem): string | undefined => {
+  const micro = item.attributes?.microarchitecture?.toLowerCase() || '';
+  const name = item.name.toLowerCase();
+
+  // AMD sockets
+  if (micro.includes('zen 5') || micro.includes('zen 4')) {
+    return 'AM5';
+  }
+  if (micro.includes('zen 3') || micro.includes('zen 2') || micro.includes('zen+') || micro.includes('zen')) {
+    return 'AM4';
+  }
+
+  // Intel sockets (basado en microarquitectura)
+  // Arrow Lake (Core Ultra 200 series) usa LGA1851
+  if (micro.includes('arrow')) {
+    return 'LGA1851';
+  }
+  // Raptor Lake y Alder Lake usan LGA1700
+  if (micro.includes('raptor') || micro.includes('alder')) {
+    return 'LGA1700';
+  }
+  if (micro.includes('rocket') || micro.includes('comet') || micro.includes('coffee') || micro.includes('kaby') || micro.includes('skylake')) {
+    return 'LGA1200';
+  }
+
+  // Fallback: inferir desde el nombre del procesador
+  // AMD Ryzen 9000/7000 series → AM5
+  if (name.includes('ryzen') && (name.includes('9000') || name.includes('7000') || /9\d{3}x/i.test(name) || /7\d{3}x/i.test(name))) {
+    return 'AM5';
+  }
+  // AMD Ryzen 5000/3000 series → AM4
+  if (name.includes('ryzen') && (name.includes('5000') || name.includes('3000') || /5\d{3}x?/i.test(name) || /3\d{3}x?/i.test(name))) {
+    return 'AM4';
+  }
+  // Intel Core Ultra (200 series) → LGA1851
+  if (name.includes('core ultra')) {
+    return 'LGA1851';
+  }
+  // Intel 14th/13th/12th gen → LGA1700
+  if (name.includes('14th') || name.includes('13th') || name.includes('12th') || /i[3579]-1[234]\d{3}/i.test(name)) {
+    return 'LGA1700';
+  }
+  // Intel 11th/10th gen → LGA1200
+  if (name.includes('11th') || name.includes('10th') || /i[3579]-1[01]\d{3}/i.test(name)) {
+    return 'LGA1200';
+  }
+
+  return undefined;
+};
+
 export default function CpuPage() {
   const apiBase = process.env.NEXT_PUBLIC_API_URL || '';
   const [data, setData] = useState<ComponentItem[]>([]);
@@ -399,6 +453,7 @@ export default function CpuPage() {
                     const micro = item.attributes?.microarchitecture;
                     const tdp = item.attributes?.tdp;
                     const graphics = item.attributes?.graphics;
+                    const socket = inferCpuSocket(item);
                     return (
                       <div
                         key={item.id}
@@ -426,6 +481,7 @@ export default function CpuPage() {
                                 {item.name}
                               </h3>
                               <div className="flex flex-wrap gap-2 text-xs text-[#302F2C]/80">
+                                {socket && badge(`Socket ${socket}`)}
                                 {cores !== undefined && badge(`${cores} cores`)}
                                 {base && badge(`Base ${base} GHz`)}
                                 {boost && badge(`Boost ${boost} GHz`)}
@@ -456,6 +512,11 @@ export default function CpuPage() {
                                   price: item.price,
                                   imageUrl: item.imageUrl,
                                   productUrl: item.productUrl,
+                                  // Guardar atributos clave para compatibilidad
+                                  // El socket se infiere de la microarquitectura ya que el dataset no lo incluye
+                                  attributes: {
+                                    ...(inferCpuSocket(item) && { socket: inferCpuSocket(item)! }),
+                                  },
                                 }}
                               />
                             </div>

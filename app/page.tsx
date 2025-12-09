@@ -116,16 +116,16 @@ export default function Home() {
                   <h3 className="text-2xl font-bold text-[#302F2C]">{card.title}</h3>
                   <p className="mt-3 text-[#302F2C]/75">{card.desc}</p>
                 </div>
-                <div className="mt-6 inline-flex items-center gap-2 text-[#302F2C] font-semibold">
+                <div className="mt-6 mb-4 inline-flex items-center gap-2 self-start rounded-xl bg-[#302F2C] px-4 py-2 text-[#FFDD26] font-semibold shadow-md shadow-[#302F2C]/15 transition group-hover:-translate-y-0.5 group-hover:shadow-lg">
                   {card.cta}
                   <span className="transition group-hover:translate-x-1">→</span>
                 </div>
-                <div className="relative w-full h-48">
+                <div className="relative w-full aspect-4/4 overflow-hidden rounded-xl">
                   <Image
                     src={card.image}
                     alt={card.title}
                     fill
-                    className="object-cover rounded-lg w-full h-full"
+                    className="object-cover w-full h-full transition duration-300 group-hover:scale-105"
                     sizes="100%"
                     priority
                   />

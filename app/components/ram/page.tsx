@@ -5,6 +5,7 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import AddToBuildButton from '@/components/AddToBuildButton';
+import { getBuildItemAttribute, loadBuild } from '@/lib/buildStore';
 
 type ComponentItem = {
   id: string;
@@ -41,6 +42,24 @@ const parseModulesCount = (item: ComponentItem) => {
   return Number.isFinite(parsed) ? parsed : undefined;
 };
 
+/** Heurística para inferir tipo de memoria (DDR4/DDR5) */
+const inferMemoryType = (item: ComponentItem): 'DDR4' | 'DDR5' | 'DDR3' | undefined => {
+  const name = item.name.toLowerCase();
+  const speed = numAttr(item, 'speed');
+
+  if (name.includes('ddr5')) return 'DDR5';
+  if (name.includes('ddr4')) return 'DDR4';
+  if (name.includes('ddr3')) return 'DDR3';
+
+  // Fallback por velocidad (heurístico)
+  if (speed) {
+    if (speed >= 4800) return 'DDR5';
+    if (speed >= 2400 && speed <= 4400) return 'DDR4';
+  }
+
+  return undefined;
+};
+
 export default function RamPage() {
   const apiBase = process.env.NEXT_PUBLIC_API_URL || '';
   const [data, setData] = useState<ComponentItem[]>([]);
@@ -55,6 +74,9 @@ export default function RamPage() {
   const [casMax, setCasMax] = useState<number | null>(null);
   const [colors, setColors] = useState<string[]>([]);
   const [page, setPage] = useState(1);
+  // Compatibilidad con motherboard (tipo de memoria)
+  const [mbMemoryType, setMbMemoryType] = useState<string | null>(null);
+  const [mbName, setMbName] = useState<string | null>(null);
   const pageSize = 20;
 
   useEffect(() => {
@@ -143,13 +165,27 @@ export default function RamPage() {
       const color = item.attributes?.color;
       const colorOk = colors.length ? colors.includes(color || '') : true;
 
-      return matchesSearch && matchesBrand && speedOk && modulesOk && casOk && colorOk;
+      const memType = inferMemoryType(item);
+      const memoryTypeOk = mbMemoryType ? memType === mbMemoryType : true;
+
+      return matchesSearch && matchesBrand && speedOk && modulesOk && casOk && colorOk && memoryTypeOk;
     });
-  }, [data, search, brand, speedMin, modulesMin, casMax, colors]);
+  }, [data, search, brand, speedMin, modulesMin, casMax, colors, mbMemoryType]);
 
   useEffect(() => {
     setPage(1);
   }, [search, brand, speedMin, modulesMin, casMax, colors]);
+
+  // Cargar motherboard del build para filtrar RAM compatible
+  useEffect(() => {
+    const build = loadBuild();
+    const mobo = build.motherboard;
+    if (mobo) {
+      const mType = getBuildItemAttribute(mobo, 'memory_type');
+      setMbMemoryType(mType || null);
+      setMbName(mobo.name);
+    }
+  }, []);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const currentPage = Math.min(page, totalPages);
@@ -358,6 +394,35 @@ export default function RamPage() {
                   {speedStats && badge(`${speedStats.min}-${speedStats.max} MHz speed`)}
                   {modulesStats && badge(`${modulesStats.min}+ modules`)}
                 </div>
+
+              {/* Motherboard compatibility banner */}
+              {mbMemoryType && mbName && (
+                <div className="mt-4 rounded-xl border-2 border-[#302F2C] bg-[#302F2C]/5 px-4 py-3">
+                  <div className="flex items-center gap-3">
+                    <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#302F2C] text-[#FFDD26]">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                        <path
+                          fillRule="evenodd"
+                          d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z"
+                          clipRule="evenodd"
+                        />
+                      </svg>
+                    </div>
+                    <div>
+                      <p className="text-sm font-semibold text-[#302F2C]">Filtering by your motherboard</p>
+                      <p className="text-xs text-[#302F2C]/70">
+                        {mbName} · Required memory type <span className="font-semibold">{mbMemoryType}</span>
+                      </p>
+                    </div>
+                    <button
+                      onClick={() => setMbMemoryType(null)}
+                      className="ml-auto rounded-lg border border-[#302F2C]/30 px-3 py-1 text-xs font-semibold text-[#302F2C] hover:bg-[#302F2C]/10 transition"
+                    >
+                      See all
+                    </button>
+                  </div>
+                </div>
+              )}
               </div>
 
               {loading && (
@@ -425,6 +490,7 @@ export default function RamPage() {
                                 {mods && badge(`${mods} kit`)}
                                 {cas && badge(`CL ${cas}`)}
                                 {fwl && badge(`FWL ${fwl}`)}
+                    {inferMemoryType(item) && badge(inferMemoryType(item)!)}
                                 {color && badge(color)}
                               </div>
                             </div>
@@ -450,6 +516,9 @@ export default function RamPage() {
                                   price: item.price,
                                   imageUrl: item.imageUrl,
                                   productUrl: item.productUrl,
+                                  attributes: {
+                                    ...(inferMemoryType(item) && { memory_type: inferMemoryType(item)! }),
+                                  },
                                 }}
                               />
                             </div>

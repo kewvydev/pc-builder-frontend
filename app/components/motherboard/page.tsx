@@ -5,6 +5,7 @@ import Image from 'next/image';
 import Link from 'next/link';
 import { useEffect, useMemo, useState } from 'react';
 import AddToBuildButton from '@/components/AddToBuildButton';
+import { loadBuild, getBuildItemAttribute } from '@/lib/buildStore';
 
 type ComponentItem = {
   id: string;
@@ -32,6 +33,29 @@ const numAttr = (item: ComponentItem, key: string) => {
   return Number.isFinite(parsed) ? parsed : undefined;
 };
 
+/** Heurística: inferir tipo de memoria soportada por la motherboard */
+const inferMemoryType = (item: ComponentItem): 'DDR5' | 'DDR4' | 'DDR3' | undefined => {
+  const name = item.name.toLowerCase();
+  const socket = item.attributes?.socket?.toLowerCase() || '';
+
+  if (name.includes('ddr5')) return 'DDR5';
+  if (name.includes('ddr4')) return 'DDR4';
+  if (name.includes('ddr3')) return 'DDR3';
+
+  // Pistas por socket
+  if (socket.includes('am5')) return 'DDR5';
+  if (socket.includes('am4')) return 'DDR4';
+  if (socket.includes('lga1851')) return 'DDR5';
+  // LGA1700 puede ser DDR4 o DDR5: intentar decidir por nombre
+  if (socket.includes('lga1700')) {
+    if (name.includes('ddr4')) return 'DDR4';
+    if (name.includes('ddr5')) return 'DDR5';
+  }
+  if (socket.includes('lga1200')) return 'DDR4';
+
+  return undefined;
+};
+
 export default function MotherboardPage() {
   const apiBase = process.env.NEXT_PUBLIC_API_URL || '';
   const [data, setData] = useState<ComponentItem[]>([]);
@@ -48,6 +72,33 @@ export default function MotherboardPage() {
   const [colors, setColors] = useState<string[]>([]);
   const [page, setPage] = useState(1);
   const pageSize = 20;
+
+  // CPU compatibility: get selected CPU socket from build
+  const [cpuSocket, setCpuSocket] = useState<string | null>(null);
+  const [cpuName, setCpuName] = useState<string | null>(null);
+  // RAM compatibility: get selected RAM memory type from build
+  const [ramMemoryType, setRamMemoryType] = useState<string | null>(null);
+  const [ramName, setRamName] = useState<string | null>(null);
+
+  useEffect(() => {
+    const build = loadBuild();
+    const cpu = build.cpu;
+    if (cpu) {
+      const socketAttr = getBuildItemAttribute(cpu, 'socket');
+      setCpuSocket(socketAttr || null);
+      setCpuName(cpu.name);
+      // Auto-set socket filter if CPU has socket defined
+      if (socketAttr) {
+        setSocket(socketAttr);
+      }
+    }
+    const ram = build.ram;
+    if (ram) {
+      const ramType = getBuildItemAttribute(ram, 'memory_type');
+      setRamMemoryType(ramType || null);
+      setRamName(ram.name);
+    }
+  }, []);
 
   useEffect(() => {
     const fetchData = async () => {
@@ -152,6 +203,9 @@ export default function MotherboardPage() {
       const color = item.attributes?.color;
       const colorOk = colors.length ? colors.includes(color || '') : true;
 
+      const mbMemType = inferMemoryType(item);
+      const ramOk = ramMemoryType ? mbMemType === ramMemoryType : true;
+
       return (
         matchesSearch &&
         matchesBrand &&
@@ -159,10 +213,11 @@ export default function MotherboardPage() {
         slotsOk &&
         socketOk &&
         formOk &&
-        colorOk
+        colorOk &&
+        ramOk
       );
     });
-  }, [data, search, brand, memoryRange, slotRange, socket, formFactors, colors]);
+  }, [data, search, brand, memoryRange, slotRange, socket, formFactors, colors, ramMemoryType]);
 
   // Reset to first page when filters change
   useEffect(() => {
@@ -312,7 +367,19 @@ export default function MotherboardPage() {
     setBrand('all');
     setMemoryRange(memoryStats || null);
     setSlotRange(slotStats || null);
-    setSocket('all');
+    // Re-check CPU compatibility on reset
+    const build = loadBuild();
+    const cpu = build.cpu;
+    if (cpu) {
+      const socketAttr = getBuildItemAttribute(cpu, 'socket');
+      setCpuSocket(socketAttr || null);
+      setCpuName(cpu.name);
+      setSocket(socketAttr || 'all');
+    } else {
+      setCpuSocket(null);
+      setCpuName(null);
+      setSocket('all');
+    }
     setFormFactors([]);
     setColors([]);
   };
@@ -377,6 +444,65 @@ export default function MotherboardPage() {
                   {memoryStats && badge(`${memoryStats.min}-${memoryStats.max} GB max memory`)}
                   {slotStats && badge(`${slotStats.min}-${slotStats.max} DIMM slots`)}
                 </div>
+
+                {/* CPU Compatibility Banner */}
+                {cpuSocket && cpuName && (
+                  <div className="mt-4 rounded-xl border-2 border-[#302F2C] bg-[#302F2C]/5 px-4 py-3">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#302F2C] text-[#FFDD26]">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                          <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                        </svg>
+                      </div>
+                      <div>
+                        <p className="text-sm font-semibold text-[#302F2C]">
+                          Filtering for your CPU compatibility
+                        </p>
+                        <p className="text-xs text-[#302F2C]/70">
+                          {cpuName} · Socket <span className="font-semibold">{cpuSocket}</span>
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => {
+                          setCpuSocket(null);
+                          setCpuName(null);
+                          setSocket('all');
+                        }}
+                        className="ml-auto rounded-lg border border-[#302F2C]/30 px-3 py-1 text-xs font-semibold text-[#302F2C] hover:bg-[#302F2C]/10 transition"
+                      >
+                        See all
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* RAM Compatibility Banner */}
+                {ramMemoryType && ramName && (
+                  <div className="mt-4 rounded-xl border-2 border-[#302F2C] bg-[#302F2C]/5 px-4 py-3">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-8 w-8 items-center justify-center rounded-full bg-[#302F2C] text-[#FFDD26]">
+                        <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor">
+                          <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd" />
+                        </svg>
+                      </div>
+                      <div>
+                        <p className="text-sm font-semibold text-[#302F2C]">Filtering for your RAM compatibility</p>
+                        <p className="text-xs text-[#302F2C]/70">
+                          {ramName} · Memory type <span className="font-semibold">{ramMemoryType}</span>
+                        </p>
+                      </div>
+                      <button
+                        onClick={() => {
+                          setRamMemoryType(null);
+                          setRamName(null);
+                        }}
+                        className="ml-auto rounded-lg border border-[#302F2C]/30 px-3 py-1 text-xs font-semibold text-[#302F2C] hover:bg-[#302F2C]/10 transition"
+                      >
+                        See all
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {loading && (
@@ -469,6 +595,12 @@ export default function MotherboardPage() {
                                   price: item.price,
                                   imageUrl: item.imageUrl,
                                   productUrl: item.productUrl,
+                                  // Guardar atributos clave para compatibilidad
+                                  attributes: {
+                                    ...(sock && { socket: sock }),
+                                    ...(form && { form_factor: form }),
+                                    ...(inferMemoryType(item) && { memory_type: inferMemoryType(item)! }),
+                                  },
                                 }}
                               />
                             </div>
@@ -528,16 +660,32 @@ export default function MotherboardPage() {
 
                   {socketOptions.length > 0 && (
                     <div className="space-y-2">
-                      <label className="text-sm font-semibold text-[#302F2C]">Socket</label>
+                      <label className="text-sm font-semibold text-[#302F2C] flex items-center gap-2">
+                        Socket
+                        {cpuSocket && (
+                          <span className="text-xs font-normal text-[#302F2C]/60">(por CPU)</span>
+                        )}
+                      </label>
                       <select
                         value={socket}
-                        onChange={(e) => setSocket(e.target.value)}
-                        className="w-full rounded-xl border border-[#302F2C]/30 bg-white px-3 py-2 text-sm text-[#302F2C] focus:outline-none focus:ring-2 focus:ring-[#302F2C]"
+                        onChange={(e) => {
+                          setSocket(e.target.value);
+                          // Si cambia el socket manualmente, desactivar el filtro de compatibilidad
+                          if (e.target.value !== cpuSocket) {
+                            setCpuSocket(null);
+                            setCpuName(null);
+                          }
+                        }}
+                        className={`w-full rounded-xl border px-3 py-2 text-sm text-[#302F2C] focus:outline-none focus:ring-2 focus:ring-[#302F2C] ${
+                          cpuSocket 
+                            ? 'border-[#302F2C] bg-[#FFDD26]/30' 
+                            : 'border-[#302F2C]/30 bg-white'
+                        }`}
                       >
                         <option value="all">All</option>
                         {socketOptions.map((s) => (
                           <option key={s} value={s}>
-                            {s}
+                            {s} {s === cpuSocket ? '(compatible con CPU)' : ''}
                           </option>
                         ))}
                       </select>

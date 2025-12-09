@@ -13,8 +13,9 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "PCBuilder+ | Construye tu PC Perfecta",
-  description: "Sistema inteligente de ensamblaje de PCs con validación de compatibilidad en tiempo real. Crea, valida y optimiza tu build con recomendaciones automáticas.",
+  title: "PCBuilder+ | Build your perfect PC",
+  description:
+    "Intelligent PC builder with real-time compatibility validation, smart recommendations, and component search.",
 };
 
 export default function RootLayout({

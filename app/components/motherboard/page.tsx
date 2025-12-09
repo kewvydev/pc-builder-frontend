@@ -32,13 +32,7 @@ const numAttr = (item: ComponentItem, key: string) => {
   return Number.isFinite(parsed) ? parsed : undefined;
 };
 
-const hasIntegratedGraphics = (item: ComponentItem) => {
-  const graphics = item.attributes?.graphics?.toLowerCase() || '';
-  if (!graphics) return false;
-  return graphics !== 'none' && graphics !== 'no' && graphics !== 'n/a';
-};
-
-export default function CpuPage() {
+export default function MotherboardPage() {
   const apiBase = process.env.NEXT_PUBLIC_API_URL || '';
   const [data, setData] = useState<ComponentItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -47,12 +41,11 @@ export default function CpuPage() {
   // Filters
   const [search, setSearch] = useState('');
   const [brand, setBrand] = useState('all');
-  const [coreRange, setCoreRange] = useState<Range | null>(null);
-  const [clockMin, setClockMin] = useState<number | null>(null);
-  const [tdpMax, setTdpMax] = useState<number | null>(null);
-  const [microarch, setMicroarch] = useState<string[]>([]);
-  const [series, setSeries] = useState<string[]>([]);
-  const [igFilter, setIgFilter] = useState<'any' | 'yes' | 'no'>('any');
+  const [memoryRange, setMemoryRange] = useState<Range | null>(null);
+  const [slotRange, setSlotRange] = useState<Range | null>(null);
+  const [socket, setSocket] = useState('all');
+  const [formFactors, setFormFactors] = useState<string[]>([]);
+  const [colors, setColors] = useState<string[]>([]);
   const [page, setPage] = useState(1);
   const pageSize = 20;
 
@@ -61,9 +54,9 @@ export default function CpuPage() {
       try {
         setLoading(true);
         setError(null);
-        const res = await fetch(`${apiBase}/api/components/cpu`, { cache: 'no-store' });
+        const res = await fetch(`${apiBase}/api/components/motherboard`, { cache: 'no-store' });
         if (!res.ok) {
-          throw new Error(`Failed to load CPUs (${res.status})`);
+          throw new Error(`Failed to load motherboards (${res.status})`);
         }
         const json = await res.json();
         setData(json || []);
@@ -77,39 +70,32 @@ export default function CpuPage() {
   }, [apiBase]);
 
   // Derive ranges and option lists
-  const { coreStats, clockStats, tdpStats, microOptions, seriesOptions, brands } =
+  const { memoryStats, slotStats, socketOptions, formFactorOptions, colorOptions, brands } =
     useMemo(() => {
-      const cores: number[] = [];
-      const clocks: number[] = [];
-      const tdps: number[] = [];
-      const microCount: Record<string, number> = {};
-      const seriesCount: Record<string, number> = {};
+      const memories: number[] = [];
+      const slots: number[] = [];
+      const socketCount: Record<string, number> = {};
+      const formCount: Record<string, number> = {};
+      const colorCount: Record<string, number> = {};
       const brandSet = new Set<string>();
 
       data.forEach((item) => {
-        const c = numAttr(item, 'core_count');
-        if (c !== undefined) cores.push(c);
-        const clock = numAttr(item, 'core_clock');
-        if (clock !== undefined) clocks.push(clock);
-        const tdp = numAttr(item, 'tdp');
-        if (tdp !== undefined) tdps.push(tdp);
+        const mem = numAttr(item, 'max_memory');
+        if (mem !== undefined) memories.push(mem);
+        const sl = numAttr(item, 'memory_slots');
+        if (sl !== undefined) slots.push(sl);
 
-        const m = item.attributes?.microarchitecture;
-        if (m) microCount[m] = (microCount[m] || 0) + 1;
-        const s = item.attributes?.series;
-        if (s) seriesCount[s] = (seriesCount[s] || 0) + 1;
+        const sock = item.attributes?.socket;
+        if (sock) socketCount[sock] = (socketCount[sock] || 0) + 1;
+
+        const form = item.attributes?.form_factor;
+        if (form) formCount[form] = (formCount[form] || 0) + 1;
+
+        const color = item.attributes?.color;
+        if (color) colorCount[color] = (colorCount[color] || 0) + 1;
+
         if (item.brand) brandSet.add(item.brand);
       });
-
-      const microOptions = Object.entries(microCount)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 8)
-        .map(([name]) => name);
-
-      const seriesOptions = Object.entries(seriesCount)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 8)
-        .map(([name]) => name);
 
       const stats = (arr: number[]) =>
         arr.length
@@ -119,22 +105,27 @@ export default function CpuPage() {
             }
           : null;
 
+      const topOptions = (obj: Record<string, number>, take = 10) =>
+        Object.entries(obj)
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, take)
+          .map(([name]) => name);
+
       return {
-        coreStats: stats(cores),
-        clockStats: stats(clocks),
-        tdpStats: stats(tdps),
-        microOptions,
-        seriesOptions,
+        memoryStats: stats(memories),
+        slotStats: stats(slots),
+        socketOptions: topOptions(socketCount, 12),
+        formFactorOptions: topOptions(formCount, 10),
+        colorOptions: topOptions(colorCount, 10),
         brands: Array.from(brandSet).sort(),
       };
     }, [data]);
 
   // Initialize ranges once data is in
   useEffect(() => {
-    if (coreStats && !coreRange) setCoreRange(coreStats);
-    if (clockStats && clockMin === null) setClockMin(clockStats.min);
-    if (tdpStats && tdpMax === null) setTdpMax(tdpStats.max);
-  }, [coreStats, clockStats, tdpStats, coreRange, clockMin, tdpMax]);
+    if (memoryStats && !memoryRange) setMemoryRange(memoryStats);
+    if (slotStats && !slotRange) setSlotRange(slotStats);
+  }, [memoryStats, slotStats, memoryRange, slotRange]);
 
   const filtered = useMemo(() => {
     return data.filter((item) => {
@@ -146,43 +137,37 @@ export default function CpuPage() {
 
       const matchesBrand = brand === 'all' || item.brand === brand;
 
-      const cores = numAttr(item, 'core_count');
-      const coreOk =
-        coreRange && cores !== undefined ? cores >= coreRange.min && cores <= coreRange.max : true;
+      const mem = numAttr(item, 'max_memory');
+      const memOk = memoryRange && mem !== undefined ? mem >= memoryRange.min && mem <= memoryRange.max : true;
 
-      const clock = numAttr(item, 'core_clock');
-      const clockOk = clockMin !== null ? clock !== undefined && clock >= clockMin : true;
+      const sl = numAttr(item, 'memory_slots');
+      const slotsOk = slotRange && sl !== undefined ? sl >= slotRange.min && sl <= slotRange.max : true;
 
-      const tdp = numAttr(item, 'tdp');
-      const tdpOk = tdpMax !== null ? tdp !== undefined && tdp <= tdpMax : true;
+      const sock = item.attributes?.socket;
+      const socketOk = socket === 'all' || sock === socket;
 
-      const micro = item.attributes?.microarchitecture;
-      const microOk = microarch.length ? microarch.includes(micro || '') : true;
+      const form = item.attributes?.form_factor;
+      const formOk = formFactors.length ? formFactors.includes(form || '') : true;
 
-      const ser = item.attributes?.series;
-      const seriesOk = series.length ? series.includes(ser || '') : true;
-
-      const ig = hasIntegratedGraphics(item);
-      const igOk =
-        igFilter === 'any' ? true : igFilter === 'yes' ? ig : !ig;
+      const color = item.attributes?.color;
+      const colorOk = colors.length ? colors.includes(color || '') : true;
 
       return (
         matchesSearch &&
         matchesBrand &&
-        coreOk &&
-        clockOk &&
-        tdpOk &&
-        microOk &&
-        seriesOk &&
-        igOk
+        memOk &&
+        slotsOk &&
+        socketOk &&
+        formOk &&
+        colorOk
       );
     });
-  }, [data, search, brand, coreRange, clockMin, tdpMax, microarch, series, igFilter]);
+  }, [data, search, brand, memoryRange, slotRange, socket, formFactors, colors]);
 
   // Reset to first page when filters change
   useEffect(() => {
     setPage(1);
-  }, [search, brand, coreRange, clockMin, tdpMax, microarch, series, igFilter]);
+  }, [search, brand, memoryRange, slotRange, socket, formFactors, colors]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const currentPage = Math.min(page, totalPages);
@@ -191,12 +176,18 @@ export default function CpuPage() {
     return filtered.slice(start, start + pageSize);
   }, [filtered, currentPage]);
 
+  const badge = (label: string) => (
+    <span className="inline-flex items-center rounded-full bg-[#302F2C]/10 px-2 py-1 text-xs font-semibold text-[#302F2C]">
+      {label}
+    </span>
+  );
+
   const Pagination = () => (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
       <div className="text-sm text-[#302F2C]/70">
         Page <span className="font-semibold text-[#302F2C]">{currentPage}</span> of{' '}
         <span className="font-semibold text-[#302F2C]">{totalPages}</span> ·{' '}
-        <span className="font-semibold text-[#302F2C]">{filtered.length}</span> CPUs
+        <span className="font-semibold text-[#302F2C]">{filtered.length}</span> motherboards
       </div>
       <div className="flex items-center gap-2">
         <button
@@ -246,23 +237,6 @@ export default function CpuPage() {
     </div>
   );
 
-  const resetFilters = () => {
-    setSearch('');
-    setBrand('all');
-    setCoreRange(coreStats || null);
-    setClockMin(clockStats?.min ?? null);
-    setTdpMax(tdpStats?.max ?? null);
-    setMicroarch([]);
-    setSeries([]);
-    setIgFilter('any');
-  };
-
-  const badge = (label: string) => (
-    <span className="inline-flex items-center rounded-full bg-[#302F2C]/10 px-2 py-1 text-xs font-semibold text-[#302F2C]">
-      {label}
-    </span>
-  );
-
   const Slider = ({
     label,
     value,
@@ -299,16 +273,53 @@ export default function CpuPage() {
           className="w-full accent-[#302F2C]"
         />
         <div className="flex justify-between text-xs text-[#302F2C]/60">
-          <span>{min}{suffix}</span>
-          <span>{max}{suffix}</span>
+          <span>
+            {min}
+            {suffix}
+          </span>
+          <span>
+            {max}
+            {suffix}
+          </span>
         </div>
       </div>
     );
   };
 
+  const TogglePill = ({
+    label,
+    active,
+    onClick,
+  }: {
+    label: string;
+    active: boolean;
+    onClick: () => void;
+  }) => (
+    <button
+      onClick={onClick}
+      className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
+        active
+          ? 'border-[#302F2C] bg-[#302F2C] text-[#FFDD26]'
+          : 'border-[#302F2C]/30 bg-white text-[#302F2C]'
+      }`}
+    >
+      {label}
+    </button>
+  );
+
+  const resetFilters = () => {
+    setSearch('');
+    setBrand('all');
+    setMemoryRange(memoryStats || null);
+    setSlotRange(slotStats || null);
+    setSocket('all');
+    setFormFactors([]);
+    setColors([]);
+  };
+
   return (
     <div className="min-h-screen bg-[#FFDD26] text-[#302F2C]">
-      {/* Navbar simple */}
+      {/* Navbar */}
       <header className="sticky top-0 z-20 border-b border-[#302F2C]/10 bg-[#FFDD26]/95 backdrop-blur">
         <div className="container mx-auto px-6 py-4 flex items-center justify-between">
           <Link href="/" className="flex items-center gap-3">
@@ -344,10 +355,10 @@ export default function CpuPage() {
               <div className="rounded-3xl bg-white/80 backdrop-blur border border-[#302F2C]/10 p-6 shadow-[0_20px_60px_-30px_rgba(0,0,0,0.35)]">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                   <div>
-                    <p className="text-sm font-semibold text-[#302F2C]/70">Browse · CPU</p>
-                    <h1 className="text-3xl font-black text-[#302F2C]">Pick a CPU</h1>
+                    <p className="text-sm font-semibold text-[#302F2C]/70">Browse · Motherboard</p>
+                    <h1 className="text-3xl font-black text-[#302F2C]">Pick a Motherboard</h1>
                     <p className="text-[#302F2C]/75">
-                      Use filters to narrow by cores, clocks, microarchitecture, and integrated graphics.
+                      Use filters to narrow by socket, form factor, memory support, and more.
                     </p>
                   </div>
                   <div className="flex gap-3">
@@ -355,7 +366,7 @@ export default function CpuPage() {
                       <input
                         value={search}
                         onChange={(e) => setSearch(e.target.value)}
-                        placeholder="Search for CPU..."
+                        placeholder="Search for motherboard..."
                         className="w-64 rounded-xl border border-[#302F2C]/30 bg-white px-4 py-3 text-sm text-[#302F2C] focus:outline-none focus:ring-2 focus:ring-[#302F2C]"
                       />
                     </div>
@@ -363,7 +374,8 @@ export default function CpuPage() {
                 </div>
                 <div className="mt-4 flex flex-wrap items-center gap-3 text-sm text-[#302F2C]/70">
                   {badge(`${filtered.length} compatible`)}
-                  {coreStats && badge(`${coreStats.min}-${coreStats.max} cores`)}
+                  {memoryStats && badge(`${memoryStats.min}-${memoryStats.max} GB max memory`)}
+                  {slotStats && badge(`${slotStats.min}-${slotStats.max} DIMM slots`)}
                 </div>
               </div>
 
@@ -384,21 +396,20 @@ export default function CpuPage() {
                 </div>
               )}
 
-              {!loading && !error && filtered.length === 0 && (
+              {!loading && !error && paginated.length === 0 && (
                 <div className="rounded-xl border border-[#302F2C]/30 bg-white px-4 py-6 text-center text-[#302F2C]/80">
-                  We could not find CPUs with the current filters. Try adjusting search or ranges.
+                  We could not find motherboards with the current filters. Try adjusting search or ranges.
                 </div>
               )}
 
               {!loading && !error && paginated.length > 0 && (
                 <div className="space-y-4">
                   {paginated.map((item) => {
-                    const cores = numAttr(item, 'core_count');
-                    const base = item.attributes?.core_clock;
-                    const boost = item.attributes?.boost_clock;
-                    const micro = item.attributes?.microarchitecture;
-                    const tdp = item.attributes?.tdp;
-                    const graphics = item.attributes?.graphics;
+                    const mem = numAttr(item, 'max_memory');
+                    const sl = numAttr(item, 'memory_slots');
+                    const sock = item.attributes?.socket;
+                    const form = item.attributes?.form_factor;
+                    const color = item.attributes?.color;
                     return (
                       <div
                         key={item.id}
@@ -417,21 +428,23 @@ export default function CpuPage() {
                                 />
                               ) : (
                                 <span className="text-lg font-bold text-[#302F2C]">
-                                  {item.brand?.slice(0, 3) || 'CPU'}
+                                  {item.brand?.slice(0, 3) || 'MB'}
                                 </span>
                               )}
                             </div>
                             <div className="space-y-1">
-                              <h3 className="text-lg font-semibold text-[#302F2C] leading-tight mb-5">
+                              <h3 className="text-lg font-semibold text-[#302F2C] leading-tight">
                                 {item.name}
                               </h3>
+                              <p className="text-sm text-[#302F2C]/70">
+                                {item.brand || 'Unknown brand'}
+                              </p>
                               <div className="flex flex-wrap gap-2 text-xs text-[#302F2C]/80">
-                                {cores !== undefined && badge(`${cores} cores`)}
-                                {base && badge(`Base ${base} GHz`)}
-                                {boost && badge(`Boost ${boost} GHz`)}
-                                {micro && badge(micro)}
-                                {tdp && badge(`${tdp} W TDP`)}
-                                {graphics && badge(graphics)}
+                                {sock && badge(sock)}
+                                {form && badge(form)}
+                                {mem !== undefined && badge(`${mem} GB max`)}
+                                {sl !== undefined && badge(`${sl} DIMM slots`)}
+                                {color && badge(color)}
                               </div>
                             </div>
                           </div>
@@ -448,7 +461,7 @@ export default function CpuPage() {
                                 View
                               </a>
                               <AddToBuildButton
-                                defaultSlot="cpu"
+                                defaultSlot="motherboard"
                                 item={{
                                   id: item.id,
                                   name: item.name,
@@ -470,7 +483,7 @@ export default function CpuPage() {
               {!loading && !error && paginated.length > 0 && <Pagination />}
             </div>
 
-            {/* Filters sidebar (right) */}
+            {/* Filters sidebar */}
             <aside className="w-full lg:w-80">
               <div className="sticky top-24 space-y-4 rounded-2xl bg-white/85 backdrop-blur border border-[#302F2C]/10 p-4 shadow-[0_18px_45px_-28px_rgba(0,0,0,0.35)]">
                 <div className="flex items-center justify-between">
@@ -513,119 +526,113 @@ export default function CpuPage() {
                     </select>
                   </div>
 
-                  <Slider
-                    label="Min core clock (GHz)"
-                    value={clockMin}
-                    min={clockStats?.min ?? null}
-                    max={clockStats?.max ?? null}
-                    step={0.1}
-                    suffix=" GHz"
-                    onChange={(v) => setClockMin(v)}
-                  />
-
-                  <Slider
-                    label="Cores"
-                    value={coreRange?.min ?? null}
-                    min={coreStats?.min ?? null}
-                    max={coreStats?.max ?? null}
-                    onChange={(v) => setCoreRange((prev) => (prev ? { ...prev, min: v } : null))}
-                  />
-                  {coreRange && (
-                    <input
-                      type="range"
-                      min={coreStats?.min ?? coreRange.min}
-                      max={coreStats?.max ?? coreRange.max}
-                      value={coreRange.max}
-                      onChange={(e) =>
-                        setCoreRange((prev) => (prev ? { ...prev, max: Number(e.target.value) } : null))
-                      }
-                      className="w-full accent-[#302F2C]"
-                    />
+                  {socketOptions.length > 0 && (
+                    <div className="space-y-2">
+                      <label className="text-sm font-semibold text-[#302F2C]">Socket</label>
+                      <select
+                        value={socket}
+                        onChange={(e) => setSocket(e.target.value)}
+                        className="w-full rounded-xl border border-[#302F2C]/30 bg-white px-3 py-2 text-sm text-[#302F2C] focus:outline-none focus:ring-2 focus:ring-[#302F2C]"
+                      >
+                        <option value="all">All</option>
+                        {socketOptions.map((s) => (
+                          <option key={s} value={s}>
+                            {s}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   )}
 
-                  <Slider
-                    label="Max TDP (W)"
-                    value={tdpMax}
-                    min={tdpStats?.min ?? null}
-                    max={tdpStats?.max ?? null}
-                    onChange={(v) => setTdpMax(v)}
-                    suffix=" W"
-                  />
-
-                  {!!microOptions.length && (
+                  {!!formFactorOptions.length && (
                     <div className="space-y-2">
-                      <p className="text-sm font-semibold text-[#302F2C]">Microarchitecture</p>
+                      <p className="text-sm font-semibold text-[#302F2C]">Form factor</p>
                       <div className="flex flex-wrap gap-2">
-                        {microOptions.map((opt) => {
-                          const active = microarch.includes(opt);
+                        {formFactorOptions.map((opt) => {
+                          const active = formFactors.includes(opt);
                           return (
-                            <button
+                            <TogglePill
                               key={opt}
+                              label={opt}
+                              active={active}
                               onClick={() =>
-                                setMicroarch((prev) =>
+                                setFormFactors((prev) =>
                                   active ? prev.filter((m) => m !== opt) : [...prev, opt]
                                 )
                               }
-                              className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
-                                active
-                                  ? 'border-[#302F2C] bg-[#302F2C] text-[#FFDD26]'
-                                  : 'border-[#302F2C]/30 bg-white text-[#302F2C]'
-                              }`}
-                            >
-                              {opt}
-                            </button>
+                            />
                           );
                         })}
                       </div>
                     </div>
                   )}
 
-                  {!!seriesOptions.length && (
+                  <Slider
+                    label="Max memory (GB)"
+                    value={memoryRange?.max ?? null}
+                    min={memoryStats?.min ?? null}
+                    max={memoryStats?.max ?? null}
+                    step={8}
+                    suffix=" GB"
+                    onChange={(v) =>
+                      setMemoryRange((prev) => (prev ? { ...prev, max: v } : { min: v, max: v }))
+                    }
+                  />
+                  <Slider
+                    label="Min memory (GB)"
+                    value={memoryRange?.min ?? null}
+                    min={memoryStats?.min ?? null}
+                    max={memoryStats?.max ?? null}
+                    step={8}
+                    suffix=" GB"
+                    onChange={(v) =>
+                      setMemoryRange((prev) => (prev ? { ...prev, min: v } : { min: v, max: v }))
+                    }
+                  />
+
+                  <Slider
+                    label="Memory slots"
+                    value={slotRange?.max ?? null}
+                    min={slotStats?.min ?? null}
+                    max={slotStats?.max ?? null}
+                    step={1}
+                    onChange={(v) =>
+                      setSlotRange((prev) => (prev ? { ...prev, max: v } : { min: v, max: v }))
+                    }
+                  />
+                  <Slider
+                    label="Min slots"
+                    value={slotRange?.min ?? null}
+                    min={slotStats?.min ?? null}
+                    max={slotStats?.max ?? null}
+                    step={1}
+                    onChange={(v) =>
+                      setSlotRange((prev) => (prev ? { ...prev, min: v } : { min: v, max: v }))
+                    }
+                  />
+
+                  {!!colorOptions.length && (
                     <div className="space-y-2">
-                      <p className="text-sm font-semibold text-[#302F2C]">Series</p>
+                      <p className="text-sm font-semibold text-[#302F2C]">Color</p>
                       <div className="flex flex-wrap gap-2">
-                        {seriesOptions.map((opt) => {
-                          const active = series.includes(opt);
+                        {colorOptions.map((opt) => {
+                          const active = colors.includes(opt);
                           return (
-                            <button
+                            <TogglePill
                               key={opt}
+                              label={opt}
+                              active={active}
                               onClick={() =>
-                                setSeries((prev) =>
+                                setColors((prev) =>
                                   active ? prev.filter((m) => m !== opt) : [...prev, opt]
                                 )
                               }
-                              className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
-                                active
-                                  ? 'border-[#302F2C] bg-[#302F2C] text-[#FFDD26]'
-                                  : 'border-[#302F2C]/30 bg-white text-[#302F2C]'
-                              }`}
-                            >
-                              {opt}
-                            </button>
+                            />
                           );
                         })}
                       </div>
                     </div>
                   )}
-
-                  <div className="space-y-2">
-                    <p className="text-sm font-semibold text-[#302F2C]">Integrated graphics</p>
-                    <div className="flex gap-2">
-                      {(['any', 'yes', 'no'] as const).map((val) => (
-                        <button
-                          key={val}
-                          onClick={() => setIgFilter(val)}
-                          className={`flex-1 rounded-xl border px-3 py-2 text-sm font-semibold transition ${
-                            igFilter === val
-                              ? 'border-[#302F2C] bg-[#302F2C] text-[#FFDD26]'
-                              : 'border-[#302F2C]/30 bg-white text-[#302F2C]'
-                          }`}
-                        >
-                          {val === 'any' ? 'Any' : val === 'yes' ? 'Yes' : 'No'}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
                 </div>
               </div>
             </aside>

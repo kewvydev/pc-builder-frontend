@@ -18,41 +18,26 @@ type ComponentItem = {
 
 type Range = { min: number; max: number };
 
-const palette = {
-  gold: '#FFDD26',
-  amber: '#FFBE1D',
-  graphite: '#302F2C',
-  white: '#F2F2F2',
-};
-
 const numAttr = (item: ComponentItem, key: string) => {
   const raw = item.attributes?.[key];
   if (!raw) return undefined;
-  const parsed = parseFloat(raw);
-  return Number.isFinite(parsed) ? parsed : undefined;
+  const cleaned = raw.replace(/,/g, ' ').split(/\s+/).filter(Boolean).map(parseFloat).filter((n) => Number.isFinite(n));
+  if (cleaned.length === 0) return undefined;
+  return Math.max(...cleaned);
 };
 
-const hasIntegratedGraphics = (item: ComponentItem) => {
-  const graphics = item.attributes?.graphics?.toLowerCase() || '';
-  if (!graphics) return false;
-  return graphics !== 'none' && graphics !== 'no' && graphics !== 'n/a';
-};
-
-export default function CpuPage() {
+export default function CoolingPage() {
   const apiBase = process.env.NEXT_PUBLIC_API_URL || '';
   const [data, setData] = useState<ComponentItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Filters
   const [search, setSearch] = useState('');
   const [brand, setBrand] = useState('all');
-  const [coreRange, setCoreRange] = useState<Range | null>(null);
-  const [clockMin, setClockMin] = useState<number | null>(null);
-  const [tdpMax, setTdpMax] = useState<number | null>(null);
-  const [microarch, setMicroarch] = useState<string[]>([]);
-  const [series, setSeries] = useState<string[]>([]);
-  const [igFilter, setIgFilter] = useState<'any' | 'yes' | 'no'>('any');
+  const [rpmMax, setRpmMax] = useState<number | null>(null);
+  const [noiseMax, setNoiseMax] = useState<number | null>(null);
+  const [sizes, setSizes] = useState<string[]>([]);
+  const [colors, setColors] = useState<string[]>([]);
   const [page, setPage] = useState(1);
   const pageSize = 20;
 
@@ -61,10 +46,8 @@ export default function CpuPage() {
       try {
         setLoading(true);
         setError(null);
-        const res = await fetch(`${apiBase}/api/components/cpu`, { cache: 'no-store' });
-        if (!res.ok) {
-          throw new Error(`Failed to load CPUs (${res.status})`);
-        }
+        const res = await fetch(`${apiBase}/api/components/cpu-cooler`, { cache: 'no-store' });
+        if (!res.ok) throw new Error(`Failed to load cooling (${res.status})`);
         const json = await res.json();
         setData(json || []);
       } catch (err: any) {
@@ -76,113 +59,74 @@ export default function CpuPage() {
     fetchData();
   }, [apiBase]);
 
-  // Derive ranges and option lists
-  const { coreStats, clockStats, tdpStats, microOptions, seriesOptions, brands } =
-    useMemo(() => {
-      const cores: number[] = [];
-      const clocks: number[] = [];
-      const tdps: number[] = [];
-      const microCount: Record<string, number> = {};
-      const seriesCount: Record<string, number> = {};
-      const brandSet = new Set<string>();
+  const { rpmStats, noiseStats, sizeOptions, colorOptions, brands } = useMemo(() => {
+    const rpms: number[] = [];
+    const noises: number[] = [];
+    const sizeCount: Record<string, number> = {};
+    const colorCount: Record<string, number> = {};
+    const brandSet = new Set<string>();
 
-      data.forEach((item) => {
-        const c = numAttr(item, 'core_count');
-        if (c !== undefined) cores.push(c);
-        const clock = numAttr(item, 'core_clock');
-        if (clock !== undefined) clocks.push(clock);
-        const tdp = numAttr(item, 'tdp');
-        if (tdp !== undefined) tdps.push(tdp);
+    data.forEach((item) => {
+      const rpm = numAttr(item, 'rpm');
+      if (rpm !== undefined) rpms.push(rpm);
+      const noise = numAttr(item, 'noise_level');
+      if (noise !== undefined) noises.push(noise);
+      const size = item.attributes?.size;
+      if (size) sizeCount[size] = (sizeCount[size] || 0) + 1;
+      const color = item.attributes?.color;
+      if (color) colorCount[color] = (colorCount[color] || 0) + 1;
+      if (item.brand) brandSet.add(item.brand);
+    });
 
-        const m = item.attributes?.microarchitecture;
-        if (m) microCount[m] = (microCount[m] || 0) + 1;
-        const s = item.attributes?.series;
-        if (s) seriesCount[s] = (seriesCount[s] || 0) + 1;
-        if (item.brand) brandSet.add(item.brand);
-      });
+    const stats = (arr: number[]) =>
+      arr.length ? { min: Math.floor(Math.min(...arr)), max: Math.ceil(Math.max(...arr)) } : null;
 
-      const microOptions = Object.entries(microCount)
+    const topOptions = (obj: Record<string, number>, take = 10) =>
+      Object.entries(obj)
         .sort((a, b) => b[1] - a[1])
-        .slice(0, 8)
+        .slice(0, take)
         .map(([name]) => name);
 
-      const seriesOptions = Object.entries(seriesCount)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 8)
-        .map(([name]) => name);
+    return {
+      rpmStats: stats(rpms),
+      noiseStats: stats(noises),
+      sizeOptions: topOptions(sizeCount, 10),
+      colorOptions: topOptions(colorCount, 10),
+      brands: Array.from(brandSet).sort(),
+    };
+  }, [data]);
 
-      const stats = (arr: number[]) =>
-        arr.length
-          ? {
-              min: Math.floor(Math.min(...arr)),
-              max: Math.ceil(Math.max(...arr)),
-            }
-          : null;
-
-      return {
-        coreStats: stats(cores),
-        clockStats: stats(clocks),
-        tdpStats: stats(tdps),
-        microOptions,
-        seriesOptions,
-        brands: Array.from(brandSet).sort(),
-      };
-    }, [data]);
-
-  // Initialize ranges once data is in
   useEffect(() => {
-    if (coreStats && !coreRange) setCoreRange(coreStats);
-    if (clockStats && clockMin === null) setClockMin(clockStats.min);
-    if (tdpStats && tdpMax === null) setTdpMax(tdpStats.max);
-  }, [coreStats, clockStats, tdpStats, coreRange, clockMin, tdpMax]);
+    if (rpmStats && rpmMax === null) setRpmMax(rpmStats.max);
+    if (noiseStats && noiseMax === null) setNoiseMax(noiseStats.max);
+  }, [rpmStats, noiseStats, rpmMax, noiseMax]);
 
   const filtered = useMemo(() => {
     return data.filter((item) => {
       const term = search.toLowerCase().trim();
       const matchesSearch =
-        !term ||
-        item.name.toLowerCase().includes(term) ||
-        item.brand?.toLowerCase().includes(term);
-
+        !term || item.name.toLowerCase().includes(term) || item.brand?.toLowerCase().includes(term);
       const matchesBrand = brand === 'all' || item.brand === brand;
 
-      const cores = numAttr(item, 'core_count');
-      const coreOk =
-        coreRange && cores !== undefined ? cores >= coreRange.min && cores <= coreRange.max : true;
+      const rpm = numAttr(item, 'rpm');
+      const rpmOk = rpmMax !== null ? rpm !== undefined && rpm <= rpmMax : true;
 
-      const clock = numAttr(item, 'core_clock');
-      const clockOk = clockMin !== null ? clock !== undefined && clock >= clockMin : true;
+      const noise = numAttr(item, 'noise_level');
+      const noiseOk = noiseMax !== null ? noise !== undefined && noise <= noiseMax : true;
 
-      const tdp = numAttr(item, 'tdp');
-      const tdpOk = tdpMax !== null ? tdp !== undefined && tdp <= tdpMax : true;
+      const size = item.attributes?.size;
+      const sizeOk = sizes.length ? sizes.includes(size || '') : true;
 
-      const micro = item.attributes?.microarchitecture;
-      const microOk = microarch.length ? microarch.includes(micro || '') : true;
+      const color = item.attributes?.color;
+      const colorOk = colors.length ? colors.includes(color || '') : true;
 
-      const ser = item.attributes?.series;
-      const seriesOk = series.length ? series.includes(ser || '') : true;
-
-      const ig = hasIntegratedGraphics(item);
-      const igOk =
-        igFilter === 'any' ? true : igFilter === 'yes' ? ig : !ig;
-
-      return (
-        matchesSearch &&
-        matchesBrand &&
-        coreOk &&
-        clockOk &&
-        tdpOk &&
-        microOk &&
-        seriesOk &&
-        igOk
-      );
+      return matchesSearch && matchesBrand && rpmOk && noiseOk && sizeOk && colorOk;
     });
-  }, [data, search, brand, coreRange, clockMin, tdpMax, microarch, series, igFilter]);
+  }, [data, search, brand, rpmMax, noiseMax, sizes, colors]);
 
-  // Reset to first page when filters change
   useEffect(() => {
     setPage(1);
-  }, [search, brand, coreRange, clockMin, tdpMax, microarch, series, igFilter]);
+  }, [search, brand, rpmMax, noiseMax, sizes, colors]);
 
   const totalPages = Math.max(1, Math.ceil(filtered.length / pageSize));
   const currentPage = Math.min(page, totalPages);
@@ -191,12 +135,18 @@ export default function CpuPage() {
     return filtered.slice(start, start + pageSize);
   }, [filtered, currentPage]);
 
+  const badge = (label: string) => (
+    <span className="inline-flex items-center rounded-full bg-[#302F2C]/10 px-2 py-1 text-xs font-semibold text-[#302F2C]">
+      {label}
+    </span>
+  );
+
   const Pagination = () => (
     <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
       <div className="text-sm text-[#302F2C]/70">
         Page <span className="font-semibold text-[#302F2C]">{currentPage}</span> of{' '}
         <span className="font-semibold text-[#302F2C]">{totalPages}</span> ·{' '}
-        <span className="font-semibold text-[#302F2C]">{filtered.length}</span> CPUs
+        <span className="font-semibold text-[#302F2C]">{filtered.length}</span> coolers
       </div>
       <div className="flex items-center gap-2">
         <button
@@ -227,9 +177,7 @@ export default function CpuPage() {
               </button>
             );
           })}
-          {totalPages > 5 && (
-            <span className="px-2 py-2 text-sm text-[#302F2C]/60">… {totalPages}</span>
-          )}
+          {totalPages > 5 && <span className="px-2 py-2 text-sm text-[#302F2C]/60">… {totalPages}</span>}
         </div>
         <button
           onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
@@ -244,23 +192,6 @@ export default function CpuPage() {
         </button>
       </div>
     </div>
-  );
-
-  const resetFilters = () => {
-    setSearch('');
-    setBrand('all');
-    setCoreRange(coreStats || null);
-    setClockMin(clockStats?.min ?? null);
-    setTdpMax(tdpStats?.max ?? null);
-    setMicroarch([]);
-    setSeries([]);
-    setIgFilter('any');
-  };
-
-  const badge = (label: string) => (
-    <span className="inline-flex items-center rounded-full bg-[#302F2C]/10 px-2 py-1 text-xs font-semibold text-[#302F2C]">
-      {label}
-    </span>
   );
 
   const Slider = ({
@@ -285,9 +216,7 @@ export default function CpuPage() {
       <div className="space-y-2">
         <div className="flex items-center justify-between text-sm font-semibold text-[#302F2C]">
           <span>{label}</span>
-          <span className="text-[#302F2C]/70">
-            {value !== null ? `${value}${suffix || ''}` : '--'}
-          </span>
+          <span className="text-[#302F2C]/70">{value !== null ? `${value}${suffix || ''}` : '--'}</span>
         </div>
         <input
           type="range"
@@ -299,28 +228,55 @@ export default function CpuPage() {
           className="w-full accent-[#302F2C]"
         />
         <div className="flex justify-between text-xs text-[#302F2C]/60">
-          <span>{min}{suffix}</span>
-          <span>{max}{suffix}</span>
+          <span>
+            {min}
+            {suffix}
+          </span>
+          <span>
+            {max}
+            {suffix}
+          </span>
         </div>
       </div>
     );
   };
 
+  const TogglePill = ({
+    label,
+    active,
+    onClick,
+  }: {
+    label: string;
+    active: boolean;
+    onClick: () => void;
+  }) => (
+    <button
+      onClick={onClick}
+      className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
+        active ? 'border-[#302F2C] bg-[#302F2C] text-[#FFDD26]' : 'border-[#302F2C]/30 bg-white text-[#302F2C]'
+      }`}
+    >
+      {label}
+    </button>
+  );
+
+  const resetFilters = () => {
+    setSearch('');
+    setBrand('all');
+    setRpmMax(rpmStats?.max ?? null);
+    setNoiseMax(noiseStats?.max ?? null);
+    setSizes([]);
+    setColors([]);
+  };
+
   return (
     <div className="min-h-screen bg-[#FFDD26] text-[#302F2C]">
-      {/* Navbar simple */}
+      {/* Navbar */}
       <header className="sticky top-0 z-20 border-b border-[#302F2C]/10 bg-[#FFDD26]/95 backdrop-blur">
         <div className="container mx-auto px-6 py-4 flex items-center justify-between">
           <Link href="/" className="flex items-center gap-3">
             <div className="relative h-10 w-10">
-              <Image
-                src="/logos/logo_bg.png"
-                alt="PCBuilder+ logo"
-                fill
-                className="object-contain rounded-md"
-                sizes="40px"
-                priority
-              />
+              <Image src="/logos/logo_bg.png" alt="PCBuilder+ logo" fill className="object-contain rounded-md" sizes="40px" priority />
             </div>
             <span className="text-lg font-bold text-[#302F2C]">PCBuilder+</span>
           </Link>
@@ -344,18 +300,16 @@ export default function CpuPage() {
               <div className="rounded-3xl bg-white/80 backdrop-blur border border-[#302F2C]/10 p-6 shadow-[0_20px_60px_-30px_rgba(0,0,0,0.35)]">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                   <div>
-                    <p className="text-sm font-semibold text-[#302F2C]/70">Browse · CPU</p>
-                    <h1 className="text-3xl font-black text-[#302F2C]">Pick a CPU</h1>
-                    <p className="text-[#302F2C]/75">
-                      Use filters to narrow by cores, clocks, microarchitecture, and integrated graphics.
-                    </p>
+                    <p className="text-sm font-semibold text-[#302F2C]/70">Browse · Cooling</p>
+                    <h1 className="text-3xl font-black text-[#302F2C]">Pick a CPU Cooler</h1>
+                    <p className="text-[#302F2C]/75">Use filters to narrow by RPM, noise, size, and color.</p>
                   </div>
                   <div className="flex gap-3">
                     <div className="hidden lg:block">
                       <input
                         value={search}
                         onChange={(e) => setSearch(e.target.value)}
-                        placeholder="Search for CPU..."
+                        placeholder="Search for cooler..."
                         className="w-64 rounded-xl border border-[#302F2C]/30 bg-white px-4 py-3 text-sm text-[#302F2C] focus:outline-none focus:ring-2 focus:ring-[#302F2C]"
                       />
                     </div>
@@ -363,17 +317,15 @@ export default function CpuPage() {
                 </div>
                 <div className="mt-4 flex flex-wrap items-center gap-3 text-sm text-[#302F2C]/70">
                   {badge(`${filtered.length} compatible`)}
-                  {coreStats && badge(`${coreStats.min}-${coreStats.max} cores`)}
+                  {rpmStats && badge(`Up to ${rpmStats.max} RPM`)}
+                  {noiseStats && badge(`Up to ${noiseStats.max} dBA`)}
                 </div>
               </div>
 
               {loading && (
                 <div className="grid gap-4 lg:grid-cols-2">
                   {Array.from({ length: 6 }).map((_, idx) => (
-                    <div
-                      key={idx}
-                      className="rounded-2xl border border-[#302F2C]/10 bg-white/70 h-52 animate-pulse"
-                    />
+                    <div key={idx} className="rounded-2xl border border-[#302F2C]/10 bg-white/70 h-52 animate-pulse" />
                   ))}
                 </div>
               )}
@@ -384,21 +336,19 @@ export default function CpuPage() {
                 </div>
               )}
 
-              {!loading && !error && filtered.length === 0 && (
+              {!loading && !error && paginated.length === 0 && (
                 <div className="rounded-xl border border-[#302F2C]/30 bg-white px-4 py-6 text-center text-[#302F2C]/80">
-                  We could not find CPUs with the current filters. Try adjusting search or ranges.
+                  We could not find coolers with the current filters. Try adjusting search or ranges.
                 </div>
               )}
 
               {!loading && !error && paginated.length > 0 && (
                 <div className="space-y-4">
                   {paginated.map((item) => {
-                    const cores = numAttr(item, 'core_count');
-                    const base = item.attributes?.core_clock;
-                    const boost = item.attributes?.boost_clock;
-                    const micro = item.attributes?.microarchitecture;
-                    const tdp = item.attributes?.tdp;
-                    const graphics = item.attributes?.graphics;
+                    const rpm = item.attributes?.rpm;
+                    const noise = item.attributes?.noise_level;
+                    const size = item.attributes?.size;
+                    const color = item.attributes?.color;
                     return (
                       <div
                         key={item.id}
@@ -408,30 +358,19 @@ export default function CpuPage() {
                           <div className="flex items-start gap-4 flex-1">
                             <div className="relative h-20 w-20 rounded-xl bg-[#FFBE1D]/30 border border-[#302F2C]/10 flex items-center justify-center overflow-hidden">
                               {item.imageUrl ? (
-                                <Image
-                                  src={item.imageUrl}
-                                  alt={item.name}
-                                  fill
-                                  className="object-contain p-2"
-                                  sizes="80px"
-                                />
+                                <Image src={item.imageUrl} alt={item.name} fill className="object-contain p-2" sizes="80px" />
                               ) : (
-                                <span className="text-lg font-bold text-[#302F2C]">
-                                  {item.brand?.slice(0, 3) || 'CPU'}
-                                </span>
+                                <span className="text-lg font-bold text-[#302F2C]">{item.brand?.slice(0, 3) || 'COOL'}</span>
                               )}
                             </div>
                             <div className="space-y-1">
-                              <h3 className="text-lg font-semibold text-[#302F2C] leading-tight mb-5">
-                                {item.name}
-                              </h3>
+                              <h3 className="text-lg font-semibold text-[#302F2C] leading-tight">{item.name}</h3>
+                              <p className="text-sm text-[#302F2C]/70">{item.brand || 'Unknown brand'}</p>
                               <div className="flex flex-wrap gap-2 text-xs text-[#302F2C]/80">
-                                {cores !== undefined && badge(`${cores} cores`)}
-                                {base && badge(`Base ${base} GHz`)}
-                                {boost && badge(`Boost ${boost} GHz`)}
-                                {micro && badge(micro)}
-                                {tdp && badge(`${tdp} W TDP`)}
-                                {graphics && badge(graphics)}
+                                {rpm && badge(`${rpm} RPM`)}
+                                {noise && badge(`${noise} dBA`)}
+                                {size && badge(`${size} mm`)}
+                                {color && badge(color)}
                               </div>
                             </div>
                           </div>
@@ -448,7 +387,7 @@ export default function CpuPage() {
                                 View
                               </a>
                               <AddToBuildButton
-                                defaultSlot="cpu"
+                                defaultSlot="cooling"
                                 item={{
                                   id: item.id,
                                   name: item.name,
@@ -470,7 +409,7 @@ export default function CpuPage() {
               {!loading && !error && paginated.length > 0 && <Pagination />}
             </div>
 
-            {/* Filters sidebar (right) */}
+            {/* Filters sidebar */}
             <aside className="w-full lg:w-80">
               <div className="sticky top-24 space-y-4 rounded-2xl bg-white/85 backdrop-blur border border-[#302F2C]/10 p-4 shadow-[0_18px_45px_-28px_rgba(0,0,0,0.35)]">
                 <div className="flex items-center justify-between">
@@ -478,10 +417,7 @@ export default function CpuPage() {
                     <p className="text-xs font-semibold text-[#302F2C]/70">Compatibility Filter</p>
                     <p className="text-sm text-[#302F2C]/70">{filtered.length} items</p>
                   </div>
-                  <button
-                    onClick={resetFilters}
-                    className="text-xs font-semibold text-[#302F2C] hover:underline"
-                  >
+                  <button onClick={resetFilters} className="text-xs font-semibold text-[#302F2C] hover:underline">
                     Reset
                   </button>
                 </div>
@@ -514,118 +450,65 @@ export default function CpuPage() {
                   </div>
 
                   <Slider
-                    label="Min core clock (GHz)"
-                    value={clockMin}
-                    min={clockStats?.min ?? null}
-                    max={clockStats?.max ?? null}
-                    step={0.1}
-                    suffix=" GHz"
-                    onChange={(v) => setClockMin(v)}
+                    label="Max RPM"
+                    value={rpmMax}
+                    min={rpmStats?.min ?? null}
+                    max={rpmStats?.max ?? null}
+                    step={50}
+                    onChange={(v) => setRpmMax(v)}
                   />
 
                   <Slider
-                    label="Cores"
-                    value={coreRange?.min ?? null}
-                    min={coreStats?.min ?? null}
-                    max={coreStats?.max ?? null}
-                    onChange={(v) => setCoreRange((prev) => (prev ? { ...prev, min: v } : null))}
-                  />
-                  {coreRange && (
-                    <input
-                      type="range"
-                      min={coreStats?.min ?? coreRange.min}
-                      max={coreStats?.max ?? coreRange.max}
-                      value={coreRange.max}
-                      onChange={(e) =>
-                        setCoreRange((prev) => (prev ? { ...prev, max: Number(e.target.value) } : null))
-                      }
-                      className="w-full accent-[#302F2C]"
-                    />
-                  )}
-
-                  <Slider
-                    label="Max TDP (W)"
-                    value={tdpMax}
-                    min={tdpStats?.min ?? null}
-                    max={tdpStats?.max ?? null}
-                    onChange={(v) => setTdpMax(v)}
-                    suffix=" W"
+                    label="Max noise (dBA)"
+                    value={noiseMax}
+                    min={noiseStats?.min ?? null}
+                    max={noiseStats?.max ?? null}
+                    step={1}
+                    suffix=" dBA"
+                    onChange={(v) => setNoiseMax(v)}
                   />
 
-                  {!!microOptions.length && (
+                  {!!sizeOptions.length && (
                     <div className="space-y-2">
-                      <p className="text-sm font-semibold text-[#302F2C]">Microarchitecture</p>
+                      <p className="text-sm font-semibold text-[#302F2C]">Radiator/Fan size</p>
                       <div className="flex flex-wrap gap-2">
-                        {microOptions.map((opt) => {
-                          const active = microarch.includes(opt);
+                        {sizeOptions.map((opt) => {
+                          const active = sizes.includes(opt);
                           return (
-                            <button
+                            <TogglePill
                               key={opt}
+                              label={opt}
+                              active={active}
                               onClick={() =>
-                                setMicroarch((prev) =>
-                                  active ? prev.filter((m) => m !== opt) : [...prev, opt]
-                                )
+                                setSizes((prev) => (active ? prev.filter((m) => m !== opt) : [...prev, opt]))
                               }
-                              className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
-                                active
-                                  ? 'border-[#302F2C] bg-[#302F2C] text-[#FFDD26]'
-                                  : 'border-[#302F2C]/30 bg-white text-[#302F2C]'
-                              }`}
-                            >
-                              {opt}
-                            </button>
+                            />
                           );
                         })}
                       </div>
                     </div>
                   )}
 
-                  {!!seriesOptions.length && (
+                  {!!colorOptions.length && (
                     <div className="space-y-2">
-                      <p className="text-sm font-semibold text-[#302F2C]">Series</p>
+                      <p className="text-sm font-semibold text-[#302F2C]">Color</p>
                       <div className="flex flex-wrap gap-2">
-                        {seriesOptions.map((opt) => {
-                          const active = series.includes(opt);
+                        {colorOptions.map((opt) => {
+                          const active = colors.includes(opt);
                           return (
-                            <button
+                            <TogglePill
                               key={opt}
+                              label={opt}
+                              active={active}
                               onClick={() =>
-                                setSeries((prev) =>
-                                  active ? prev.filter((m) => m !== opt) : [...prev, opt]
-                                )
+                                setColors((prev) => (active ? prev.filter((m) => m !== opt) : [...prev, opt]))
                               }
-                              className={`rounded-full border px-3 py-1 text-xs font-semibold transition ${
-                                active
-                                  ? 'border-[#302F2C] bg-[#302F2C] text-[#FFDD26]'
-                                  : 'border-[#302F2C]/30 bg-white text-[#302F2C]'
-                              }`}
-                            >
-                              {opt}
-                            </button>
+                            />
                           );
                         })}
                       </div>
                     </div>
                   )}
-
-                  <div className="space-y-2">
-                    <p className="text-sm font-semibold text-[#302F2C]">Integrated graphics</p>
-                    <div className="flex gap-2">
-                      {(['any', 'yes', 'no'] as const).map((val) => (
-                        <button
-                          key={val}
-                          onClick={() => setIgFilter(val)}
-                          className={`flex-1 rounded-xl border px-3 py-2 text-sm font-semibold transition ${
-                            igFilter === val
-                              ? 'border-[#302F2C] bg-[#302F2C] text-[#FFDD26]'
-                              : 'border-[#302F2C]/30 bg-white text-[#302F2C]'
-                          }`}
-                        >
-                          {val === 'any' ? 'Any' : val === 'yes' ? 'Yes' : 'No'}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
                 </div>
               </div>
             </aside>
